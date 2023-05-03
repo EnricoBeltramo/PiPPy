@@ -2,6 +2,9 @@
 import torch
 from typing import Any
 
+import logging
+logging.getLogger().setLevel(logging.INFO)
+
 
 class MyNetworkBlock(torch.nn.Module):
     def __init__(self, in_dim, out_dim):
