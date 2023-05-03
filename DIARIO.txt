@@ -1,0 +1,5 @@
+torchrun --standalone --nnodes=1 --nproc-per-node=2 example_train.py
+
+LOGLEVEL=INFO python -u -m torch.distributed.run --nnodes=1 --nproc_per_node=gpu train.py
+
+python -m torch.distributed.run --nnodes=1 --nproc-per-node=3 example_train.py

@@ -74,8 +74,8 @@ print(pipe.split_gm.submod_2)
 # https://pytorch.org/docs/stable/elastic/run.html
 import os
 
-os.environ["LOCAL_RANK"] = '0'
-os.environ["WORLD_SIZE"] = '1'
+#os.environ["LOCAL_RANK"] = '0'
+#os.environ["WORLD_SIZE"] = '1'
 
 local_rank = int(os.environ["LOCAL_RANK"])
 world_size = int(os.environ["WORLD_SIZE"])
@@ -89,6 +89,7 @@ world_size = int(os.environ["WORLD_SIZE"])
 import torch.distributed.rpc as rpc
 
 rpc.init_rpc(f"worker{local_rank}", rank=local_rank, world_size=world_size)
+
 
 # PiPPy relies on the concept of a "driver" process. The driver process
 # should be a single process within the RPC group that instantiates the

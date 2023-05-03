@@ -11,6 +11,14 @@
       "program": "${file}",
       "console": "integratedTerminal",
       "justMyCode": false
+    },
+    {
+      "name": "Python: Module",
+      "type": "python",
+      "request": "launch",
+      "module": "torch.distributed.run",
+      "justMyCode": true,
+      "args": ["--nnodes","1","--nproc-per-node","3","example_train.py"]
     }
   ]
 }
