@@ -74,6 +74,9 @@ print(pipe.split_gm.submod_2)
 # https://pytorch.org/docs/stable/elastic/run.html
 import os
 
+os.environ["LOCAL_RANK"] = '0'
+os.environ["WORLD_SIZE"] = '1'
+
 local_rank = int(os.environ["LOCAL_RANK"])
 world_size = int(os.environ["WORLD_SIZE"])
 
