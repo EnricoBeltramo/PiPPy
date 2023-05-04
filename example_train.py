@@ -1,3 +1,8 @@
+import os
+
+# print(os.environ["MASTER_ADDR"])
+# print(os.environ["MASTER_PORT"])
+
 # Copyright (c) Meta Platforms, Inc. and affiliates
 import torch
 from typing import Any
@@ -82,6 +87,7 @@ import os
 
 local_rank = int(os.environ["LOCAL_RANK"])
 world_size = int(os.environ["WORLD_SIZE"])
+
 
 # PiPPy uses the PyTorch RPC interface. To use RPC, we must call `init_rpc`
 # and inform the RPC framework of this process's rank and the total world

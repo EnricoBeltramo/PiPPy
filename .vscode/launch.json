@@ -18,7 +18,7 @@
       "request": "launch",
       "module": "torch.distributed.run",
       "justMyCode": true,
-      "args": ["--nnodes","1","--nproc-per-node","3","example_train.py"]
+      "args": ["--nnodes","1","--nproc-per-node","3","--master_addr","localhost","--master_port","23456","example_train.py"]
     }
   ]
 }
