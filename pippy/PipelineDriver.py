@@ -12,6 +12,7 @@ import torch
 import torch.distributed.rpc as rpc
 import pippy.fx
 from pippy.fx.passes import shape_prop
+import time
 
 from pippy.IR import Pipe
 from pippy.backward import (
@@ -27,6 +28,8 @@ from pippy.microbatch import (
     split_args_kwargs_into_chunks,
     merge_chunks,
 )
+
+import heapq
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -58,6 +61,114 @@ logging.getLogger().setLevel(logging.INFO)
 #       c) Allow it to be dynamic but cache compiled policies?
 #
 #   Decision: We can easily convert (a) to (c), so let's go with (a).
+
+class SortedList:
+    def __init__(self):
+        self._data = []
+
+    def push(self, number, item):
+        heapq.heappush(self._data, (number, item))
+
+    def get_sorted_list(self):
+        return sorted(self._data)
+
+    def pop(self):
+        return heapq.heappop(self._data)
+    
+    def len(self):
+        return len(self._data)
+    
+    
+_lock = threading.Lock()
+_lockSend = threading.Lock()
+_status = [''] * 30
+_messagesOrder = SortedList()
+_maxRank = 0
+_counter = 0
+_counterDisplay = 0
+
+class MessageWorker:
+    def __init__(self):
+        pass
+    
+    def send_message(self, message, to = 0):
+        fut = rpc.rpc_async(to, self.manageMessage, args=(message,))
+        return fut
+
+    def manageMessage(self,message):
+        pass
+        # for _ in range(10):
+        #     print(f"Message: {message} from worker {os.getpid()}")
+
+
+
+class pipelineLogger(MessageWorker):
+    def __init__(self):
+        super().__init__()
+
+
+    def setRank(self,local_rank):
+        self.local_rank = local_rank
+
+    def step(self,typeStep, batch, start = True):
+        global _counter
+        with _lockSend:
+            message = (time.time(), self.local_rank,_counter, typeStep, batch,start)
+            _counter += 1
+            self.send_message(message)
+
+    def manageMessage(self,message):
+
+        global _messagesOrder
+
+        with _lock:
+
+            timesend,_,_,_, _,_ = message
+            _messagesOrder.push(timesend,message)
+
+            self.display()
+
+    def display(self):
+
+        global _messagesOrder, _counterDisplay
+
+        while _messagesOrder.len() > 5:
+            _, message = _messagesOrder.pop()
+            self.printMessage(message)
+
+    def printMessage(self,message):
+
+        global _status, _maxRank
+
+        timesend,local_rank,counter,typeStep, batch,start = message
+
+        if local_rank > _maxRank:
+            _maxRank = local_rank
+
+        _status[local_rank] = str(typeStep) + str(batch)
+
+        if start:
+            _status[local_rank] += ' --> START'
+        else:
+            _status[local_rank] += ' --> END'
+
+        _status[local_rank] += ' - ' + str(counter).ljust(5)
+
+        log = ''
+
+        for ind in range(_maxRank + 1):
+            log += _status[ind].ljust(22) + ' | '
+
+        logging.info(log)
+
+        if start: 
+            _status[local_rank] = '...........'
+        else:
+            _status[local_rank] = ''
+
+
+
+pipeLogger = pipelineLogger()
 
 DEBUG = False
 
@@ -228,7 +339,7 @@ class RankWorker(EventRecorder):
         _record_mem_dumps=False,
         checkpoint=False,
     ):
-        logging.info(f"[{rank}] Instantiating RankWorker")
+        logging.info(f"[{rank} {pp_rank}] Instantiating RankWorker")
         self.rank = rank
         self.all_stages = all_stages
         self.rank = rank
@@ -256,6 +367,19 @@ class RankWorker(EventRecorder):
             target=self.worker_loop, name=f"worker_{self.rank}", daemon=True
         )
         self.worker_thread.start()
+
+        pipeLogger.setRank(rank)
+        self.pipelineLogger : pipelineLogger = pipeLogger # self.initLoggerMessage(rank)
+
+    # def initLoggerMessage(self,local_rank):
+    #     return pipelineLogger(local_rank)
+
+
+    def sendLoggerMessage(self,typeStep,batch,start = True):
+        if self.pipelineLogger is not None:
+            self.pipelineLogger.step(typeStep, batch,start)
+
+
 
     def create_stage_executor(self, stage_id, mod, mod_name):
         if stage_id in self.stage_executors:
@@ -419,9 +543,11 @@ class RankWorker(EventRecorder):
                 kwargs = pippy.fx.node.map_aggregate(
                     kwargs, extract_tensor_args, dont_traverse_size
                 )
-                logging.info(
-                    f"[{self.rank}] Running forward module for microbatch {work_item.microbatch_id}"  # type: ignore[union-attr]
-                )
+                #logging.info(
+                #    f"[{self.rank}] Running forward module for microbatch {work_item.microbatch_id}"  # type: ignore[union-attr]
+                #)
+
+                self.sendLoggerMessage('F',work_item.microbatch_id,True)
 
                 def forward_maybe_with_ddp(args, kwargs):
                     if isinstance(
@@ -448,6 +574,12 @@ class RankWorker(EventRecorder):
                 else:
                     with torch.enable_grad():
                         out_val = forward_maybe_with_ddp(args, kwargs)
+
+                #logging.info(
+                #    f"[{self.rank}] END running forward module for microbatch {work_item.microbatch_id}"  # type: ignore[union-attr]
+                #)
+
+                self.sendLoggerMessage('F',work_item.microbatch_id,False)
 
                 return out_val, flat_args
 
@@ -496,9 +628,11 @@ class RankWorker(EventRecorder):
                     )
 
             elif work_item.phase == Phase.BACKWARD:
-                logging.info(
-                    f"[{self.rank}] Running backward for microbatch {work_item.microbatch_id}"
-                )
+                #logging.info(
+                #    f"[{self.rank}] Running backward for microbatch {work_item.microbatch_id}"
+                #)
+
+                self.sendLoggerMessage('B',work_item.microbatch_id,True)
 
                 batch_id_to_remaining_backward_microbatches[batch_id] -= 1
 
@@ -520,6 +654,12 @@ class RankWorker(EventRecorder):
                     )
 
                 out_val = stage_backward(*args, **kwargs)
+
+                #logging.info(
+                #    f"[{self.rank}] End running backward for microbatch {work_item.microbatch_id}"
+                #)
+
+                self.sendLoggerMessage('B',work_item.microbatch_id,False)
 
                 # Schedule forward stage of a new micro-batch
                 self.outstanding -= 1

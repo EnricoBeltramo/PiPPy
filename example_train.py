@@ -8,68 +8,96 @@ import torch
 from typing import Any
 
 import logging
-logging.getLogger().setLevel(logging.INFO)
-
-
-class MyNetworkBlock(torch.nn.Module):
-    def __init__(self, in_dim, out_dim):
-        super().__init__()
-        self.lin = torch.nn.Linear(in_dim, out_dim)
-
-    def forward(self, x):
-        x = self.lin(x)
-        x = torch.relu(x)
-        return x
-
-
-class MyNetwork(torch.nn.Module):
-    def __init__(self, in_dim, layer_dims):
-        super().__init__()
-
-        prev_dim = in_dim
-        for i, dim in enumerate(layer_dims):
-            setattr(self, f"layer{i}", MyNetworkBlock(prev_dim, dim))
-            prev_dim = dim
-
-        self.num_layers = len(layer_dims)
-        # 10 output classes
-        self.output_proj = torch.nn.Linear(layer_dims[-1], 10)
-
-    def forward(self, x):
-        for i in range(self.num_layers):
-            x = getattr(self, f"layer{i}")(x)
-
-        return self.output_proj(x)
-
-
-mn = MyNetwork(512, [512, 1024, 256])
+from pippy.IR import annotate_split_points, PipeSplitWrapper
 
 from pippy.IR import Pipe
 
-pipe = Pipe.from_tracing(mn)
-print(pipe)
-print(pipe.split_gm.submod_0)
+# PiPPy uses the PyTorch RPC interface. To use RPC, we must call `init_rpc`
+# and inform the RPC framework of this process's rank and the total world
+# size. We can directly pass values `torchrun` provided.`
+#
+# To learn more about the PyTorch RPC framework, see
+# https://pytorch.org/docs/stable/rpc.html
+import torch.distributed.rpc as rpc
+
+logging.getLogger().setLevel(logging.INFO)
 
 
-from pippy.IR import annotate_split_points, PipeSplitWrapper
 
-annotate_split_points(
-    mn,
-    {
-        "layer0": PipeSplitWrapper.SplitPoint.END,
-        "layer1": PipeSplitWrapper.SplitPoint.END,
-    },
-)
+def createModel():
+    class MyNetworkBlock(torch.nn.Module):
+        def __init__(self, in_dim, out_dim):
+            super().__init__()
+            self.lin = torch.nn.Linear(in_dim, out_dim)
 
-pipe = Pipe.from_tracing(mn)
-print(" pipe ".center(80, "*"))
-print(pipe)
-print(" submod0 ".center(80, "*"))
-print(pipe.split_gm.submod_0)
-print(" submod1 ".center(80, "*"))
-print(pipe.split_gm.submod_1)
-print(" submod2 ".center(80, "*"))
-print(pipe.split_gm.submod_2)
+        def forward(self, x):
+            x = self.lin(x)
+            x = torch.relu(x)
+            return x
+
+
+    class MyNetwork(torch.nn.Module):
+        def __init__(self, in_dim, layer_dims):
+            super().__init__()
+
+            prev_dim = in_dim
+            for i, dim in enumerate(layer_dims):
+                setattr(self, f"layer{i}", MyNetworkBlock(prev_dim, dim))
+                prev_dim = dim
+
+            self.num_layers = len(layer_dims)
+            # 10 output classes
+            self.output_proj = torch.nn.Linear(layer_dims[-1], 10)
+
+        def forward(self, x):
+            for i in range(self.num_layers):
+                x = getattr(self, f"layer{i}")(x)
+
+            return self.output_proj(x)
+
+
+    mn = MyNetwork(512, [512, 1024, 256])
+
+    return mn
+
+
+def createPipe(mn,local_rank):
+
+    print(("-------> WORKER : " + str(local_rank)).center(80, "*"))
+
+    if local_rank == 0:
+        print("Master worker".center(80, "*"))
+
+
+    pipe = Pipe.from_tracing(mn)
+
+    if local_rank == 0:
+        print("PIPE definition".center(80, "*"))
+        print(pipe)
+        print("PIPE module before split".center(80, "*"))
+        print(pipe.split_gm.submod_0)
+
+    annotate_split_points(
+        mn,
+        {
+            "layer0": PipeSplitWrapper.SplitPoint.END,
+            "layer1": PipeSplitWrapper.SplitPoint.END,
+        },
+    )
+
+    pipe = Pipe.from_tracing(mn)
+
+    if local_rank == 0:
+        print(" pipe ".center(80, "*"))
+        print(pipe)
+        print(" submod0 ".center(80, "*"))
+        print(pipe.split_gm.submod_0)
+        print(" submod1 ".center(80, "*"))
+        print(pipe.split_gm.submod_1)
+        print(" submod2 ".center(80, "*"))
+        print(pipe.split_gm.submod_2)
+
+    return pipe
 
 
 # To run a distributed training job, we must launch the script in multiple
@@ -80,7 +108,6 @@ print(pipe.split_gm.submod_2)
 #
 # To learn more about `torchrun`, see
 # https://pytorch.org/docs/stable/elastic/run.html
-import os
 
 #os.environ["LOCAL_RANK"] = '0'
 #os.environ["WORLD_SIZE"] = '1'
@@ -88,17 +115,14 @@ import os
 local_rank = int(os.environ["LOCAL_RANK"])
 world_size = int(os.environ["WORLD_SIZE"])
 
+mn = createModel()
+pipe = createPipe(mn,local_rank)
 
-# PiPPy uses the PyTorch RPC interface. To use RPC, we must call `init_rpc`
-# and inform the RPC framework of this process's rank and the total world
-# size. We can directly pass values `torchrun` provided.`
-#
-# To learn more about the PyTorch RPC framework, see
-# https://pytorch.org/docs/stable/rpc.html
-import torch.distributed.rpc as rpc
 
 rpc.init_rpc(f"worker{local_rank}", rank=local_rank, world_size=world_size)
 
+
+#messageQueue.send_message('message from worker: ' + str(local_rank))
 
 # PiPPy relies on the concept of a "driver" process. The driver process
 # should be a single process within the RPC group that instantiates the
@@ -171,6 +195,8 @@ if local_rank == 0:
 
     x = torch.randn(512, 512)
     target = torch.randn(512, 10)
+
+
     for i in range(N_TRAINING_STEPS):
         optimizer.zero_grad()
         pipe_loss = driver(x, target)
