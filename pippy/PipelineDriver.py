@@ -86,6 +86,7 @@ _messagesOrder = SortedList()
 _maxRank = 0
 _counter = 0
 _counterDisplay = 0
+_PrevTime = time.time()
 
 class MessageWorker:
     def __init__(self):
@@ -138,7 +139,7 @@ class pipelineLogger(MessageWorker):
 
     def printMessage(self,message):
 
-        global _status, _maxRank
+        global _status, _maxRank, _PrevTime
 
         timesend,local_rank,counter,typeStep, batch,start = message
 
@@ -154,7 +155,8 @@ class pipelineLogger(MessageWorker):
 
         _status[local_rank] += ' - ' + str(counter).ljust(5)
 
-        log = ''
+        log = str(int((timesend - _PrevTime)*1000000)).ljust(10) + ' | '
+        _PrevTime = timesend
 
         for ind in range(_maxRank + 1):
             log += _status[ind].ljust(22) + ' | '

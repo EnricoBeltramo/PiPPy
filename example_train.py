@@ -130,7 +130,7 @@ rpc.init_rpc(f"worker{local_rank}", rank=local_rank, world_size=world_size)
 # in the RPC group will receive commands from this process and execute
 # the pipeline stages
 if local_rank == 0:
-    from pippy.PipelineDriver import PipelineDriverFillDrain
+    from pippy.PipelineDriver import PipelineDriverFillDrain, PipelineDriver1F1B
     from pippy.microbatch import TensorChunkSpec
 
     # LossWrapper is a convenient base class you can use to compose your model
@@ -171,7 +171,8 @@ if local_rank == 0:
     output_chunk_spec: Any = LossReducer(0.0, lambda a, b: a + b)
 
     # Instantiate the driver as usual.
-    driver = PipelineDriverFillDrain(
+    driver = PipelineDriverFillDrain(       
+    #driver = PipelineDriver1F1B(
         pipe,
         64,
         world_size=world_size,
